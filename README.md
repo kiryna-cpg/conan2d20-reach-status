@@ -1,91 +1,61 @@
 # Conan 2d20 - Reach Status
 
-Small module for the Foundry VTT system **“Robert E. Howard’s Conan: Adventures in an Age Undreamed Of”**.
+Small module for Foundry VTT and the system **“Robert E. Howard’s Conan: Adventures in an Age Undreamed Of”**.
 
-This module automatically applies a **Reach** status icon to Tokens based on the **equipped weapon Reach** (`item.system.range`). It also provides a manual **No Reach** status for convenience.
-
----
+The module provides **visual Reach indicators** on tokens by applying custom status effects based on an Actor’s available weapons/attacks.
 
 ## Features
 
-- Automatically applies a Reach status based on the equipped weapon:
-  - Reach is read from: `item.system.range`
-  - Uses the **highest Reach** among equipped weapons
-- Reach statuses available (automatic, HUD-hidden):
-  - `Reach 1`, `Reach 2`, `Reach 3`
-- Module Setting (Module Settings):
-  - **Show Reach 1 Icon** (enabled by default)
-    - When disabled, Reach 1 weapons do **not** show a Reach icon (reduces visual clutter)
-- Manual status (HUD-visible):
+- **Automatic Reach status (Reach 1–3)**
+  - **Player Characters** (`actor.type = character`): highest Reach among **equipped** weapons.
+  - **NPCs** (`actor.type = npc`): highest Reach among `npcattack` (and `weapon`) items.
+  - Reach value is read from `item.system.range`.
+
+- **Module setting**
+  - **Show Reach 1 Icon** (default: enabled)
+    - When disabled, **Reach 1 is not applied automatically** (reduces on-screen clutter).
+    - Manual overrides (GM) on NPC tokens are not affected.
+
+- **Manual statuses**
   - **No Reach**
-  - When active, it **suppresses** automatic Reach application
-- Mutual exclusivity:
-  - Only one of these can be active at a time:
+    - When enabled, it suppresses automatic Reach application for that Actor.
+
+- **Mutual exclusivity**
+  - Only one of the following can be active at a time:
     - `No Reach`, `Reach 1`, `Reach 2`, `Reach 3`
 
----
+- **NPC manual override (GM)**
+  - For NPC tokens, the GM can manually select `Reach 1–3` from the Token HUD.
+  - The override is stored on the Actor (linked) or on the TokenDocument (unlinked).
 
 ## Requirements
 
-- Foundry VTT: v13 (**tested with 13.351**)
-- System: Robert E. Howard’s Conan 2d20 (**tested with 2.4.3**)
-
----
+- Foundry VTT: v13 (tested with **13.351**)
+- System: Conan 2d20 (tested with **2.4.3**)
 
 ## Installation
 
-### Install via Manifest URL (recommended)
+### Install via Manifest URL
 
 1. Foundry → **Add-on Modules** → **Install Module**
-2. Paste this Manifest URL:
+2. Paste the Manifest URL:
 
 ```txt
 https://raw.githubusercontent.com/kiryna-cpg/conan2d20-reach-status/main/module.json
 ```
 
-3. Install, then enable it in your world:
+3. Install and enable it:
    - **World → Manage Modules → enable “Conan 2d20 - Reach Status”**
-
----
 
 ## Configuration
 
-Go to:
-
 **Game Settings → Configure Settings → Module Settings → Conan 2d20 - Reach Status**
 
-### Show Reach 1 Icon (default: ON)
+- **Show Reach 1 Icon** (default: ON)
 
-If disabled, equipped weapons with Reach 1 will **not** display the Reach 1 icon.
+## Assets
 
----
-
-## What this module does
-
-This module registers custom status effects and manages them automatically:
-
-- Automatic statuses (not shown in HUD):
-  - `Reach 1`, `Reach 2`, `Reach 3`
-- Manual status (shown in HUD):
-  - `No Reach`
-
-Automatic behavior:
-- On equip/unequip or weapon updates, the module:
-  - reads `item.system.range` for equipped weapons
-  - determines the highest Reach
-  - applies the matching Reach status (unless suppressed by **No Reach**)
-- If **Show Reach 1 Icon** is disabled, Reach 1 does not apply an icon.
-
-Manual behavior:
-- If the GM or token owner activates **No Reach** from the Token HUD:
-  - Reach icons will not be applied automatically
-  - No Reach remains mutually exclusive with Reach 1/2/3
-
----
-
-## Icons / Assets
-
-Place these files in:
+Place these files under:
 
 `modules/conan2d20-reach-status/icons/`
 
@@ -94,32 +64,19 @@ Place these files in:
 - `reach-3.webp`
 - `no-reach.webp`
 
----
+## Compatibility
 
-## Compatibility notes
+This module uses Foundry’s core status effects to display token icons. It is intentionally limited to **visual indicators** and does not modify rules logic or roll difficulty.
 
-- This module uses Foundry core status effects (Active Effects) to display token icons.
-- This module is intentionally minimal:
-  - It provides **visual Reach indicators only**
-  - It does **not** change roll difficulty, apply combat automation, or modify rules logic
+## Support
 
----
-
-## Support / Issues
-
-Report issues or request improvements here:
+Issues and feature requests:
 
 ```txt
-ttps://github.com/kiryna-cpg/conan2d20-reach-status/issues
+https://github.com/kiryna-cpg/conan2d20-reach-status/issues
 ```
 
-When reporting, include:
-
-- Foundry version
-- Conan 2d20 system version
-- Steps to reproduce + console logs (F12)
-
----
+When reporting an issue, include Foundry version, system version, reproduction steps, and console logs (F12).
 
 ## License
 

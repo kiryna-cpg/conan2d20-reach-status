@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [0.0.3] - 2026-02-18
+### Added
+- NPC support: automatic Reach is derived from the highest `system.range` among `npcattack` (and `weapon`) items.
+- NPC GM override: the GM may set Reach 1–3 from the Token HUD; the selection is persisted per token/actor.
+
+### Changed
+- Setting **Show Reach 1 Icon** now updates all placed tokens immediately.
+
+### Fixed
+- Correct handling for unlinked (synthetic) tokens by storing manual override flags on the TokenDocument when applicable.
+- Prevented missed updates when recalculating multiple tokens by using per-Actor debouncing.
+
 ## [0.0.2] - 2026-02-17
 ### Added
 - Module Setting: **Show Reach 1 Icon** (enabled by default).

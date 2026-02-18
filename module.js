@@ -1,45 +1,50 @@
 /**
  * Conan 2d20 - Reach Status
- * Automatically applies a Reach status (1..3) to an Actor based on the equipped weapon Reach (item.system.range),
- * so the Token displays a visual Reach icon.
- *
- * Additional features:
- * - Module Setting: optionally hide the Reach 1 icon (enabled by default).
- * - Manual status: "No Reach" (GM/owner can toggle it from the Token HUD).
- * - Mutual exclusivity: Reach 1/2/3 and No Reach cannot be active at the same time.
+ * Foundry VTT module for the Conan 2d20 system.
  */
 
 const MODULE_ID = "conan2d20-reach-status";
 const MAX_REACH = 3;
 
+// Status IDs
 const NO_REACH_ID = "conan-no-reach";
 const REACH_IDS = Array.from({ length: MAX_REACH }, (_, i) => `conan-reach-${i + 1}`);
 const ALL_STATUS_IDS = [NO_REACH_ID, ...REACH_IDS];
 
+// Manual override flags (stored on Actor for linked actors, or on TokenDocument for unlinked/synthetic actors)
+const FLAG_MANUAL_STATUS = "manualStatusId";
+const FLAG_MANUAL_MARKER = "manualSetViaHud";
+
 let _enforcingExclusivity = false;
 
-/**
- * Module base path derived from import.meta.url to avoid hardcoding folder names.
- */
+// Per-actor debouncers (keyed by actor.uuid)
+const _debouncers = new Map();
+
 const MODULE_PATH = new URL(".", import.meta.url).pathname
   .replace(/^\/+/, "")
   .replace(/\/$/, "");
 
-/**
- * Clamp a number between min and max (compatibility helper).
- */
 function clampNumber(value, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return min;
   return Math.min(Math.max(n, min), max);
 }
 
-/**
- * Build status effect definitions to be registered into CONFIG.statusEffects.
- * Reach statuses are not shown in the HUD (they are applied automatically).
- * The "No Reach" status is shown in the HUD and is manual.
- * @returns {Array<object>}
- */
+function isAuthoritativeForActor(actor) {
+  if (game.user.isGM) return true;
+  const anyActiveGM = game.users?.some(u => u.active && u.isGM);
+  if (anyActiveGM) return false;
+
+  return actor?.isOwner === true;
+}
+
+function rerenderTokenHUD() {
+  try {
+    const hud = canvas?.hud?.token;
+    if (hud?.rendered) hud.render();
+  } catch (_) { /* no-op */ }
+}
+
 function buildStatusEffects() {
   const reachStatuses = Array.from({ length: MAX_REACH }, (_, i) => {
     const n = i + 1;
@@ -48,7 +53,7 @@ function buildStatusEffects() {
       name: `Reach ${n}`,
       label: `Reach ${n}`,
       img: `${MODULE_PATH}/icons/reach-${n}.webp`,
-      hud: false
+      hud: true
     };
   });
 
@@ -66,51 +71,39 @@ function buildStatusEffects() {
 Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "showReach1", {
     name: "Show Reach 1 Icon",
-    hint: "If disabled, equipped weapons with Reach 1 will not display a Reach icon (to reduce visual clutter).",
+    hint: "If disabled, tokens with Reach 1 will not show a Reach Status icon (reduces visual clutter).",
     scope: "world",
     config: true,
     type: Boolean,
     default: true,
     onChange: () => {
-      // Re-evaluate currently present scene actors when the setting changes.
       if (!canvas?.ready) return;
-      const actors = new Set(canvas.tokens.placeables.map(t => t.actor).filter(Boolean));
-      for (const actor of actors) debouncedSetReach(actor);
+      for (const token of canvas.tokens.placeables) {
+        const actor = token.actor;
+        if (actor && isAuthoritativeForActor(actor)) scheduleReach(actor, { immediate: true });
+      }
     }
   });
 
   const effects = buildStatusEffects();
   const existingIds = new Set((CONFIG.statusEffects ?? []).map(e => e.id));
-
   CONFIG.statusEffects = (CONFIG.statusEffects ?? []).concat(
     effects.filter(e => !existingIds.has(e.id))
   );
 });
 
-/**
- * Determine whether an ActiveEffect includes a given statusId.
- * In Foundry v13, statusIds are stored in the "statuses" SetField.
- */
 function effectHasStatus(effect, statusId) {
   const statuses = effect?.statuses ?? effect?._source?.statuses;
   if (!statuses) return false;
   if (statuses instanceof Set) return statuses.has(statusId);
   if (Array.isArray(statuses)) return statuses.includes(statusId);
-  // Some older shims may serialize Set-like objects differently.
   return false;
 }
 
-/**
- * Check whether an Actor currently has a given statusId active.
- */
 function actorHasStatus(actor, statusId) {
-  return actor.effects.some(e => e.active && effectHasStatus(e, statusId));
+  return actor.effects.some(e => !e.disabled && effectHasStatus(e, statusId));
 }
 
-/**
- * Apply mutual exclusivity: activate exactly one of our statuses, deactivate the rest.
- * If activeId is null, all of our statuses are deactivated.
- */
 async function applyExclusiveStatus(actor, activeId) {
   if (!actor) return;
 
@@ -122,47 +115,82 @@ async function applyExclusiveStatus(actor, activeId) {
   } finally {
     _enforcingExclusivity = false;
   }
+
+  rerenderTokenHUD();
 }
 
-/**
- * Determine whether an Item is an equipped weapon.
- * Conan 2d20 uses a sheet toggle ("item-toggle-equip") which typically persists to a boolean field (e.g. system.equipped).
- * @param {Item} item
- * @returns {boolean}
- */
+function getFlagDocument(actor) {
+  if (actor?.isToken && actor?.token?.document) return actor.token.document;
+  return actor;
+}
+
+function getManualFlags(actor) {
+  const doc = getFlagDocument(actor);
+  return {
+    manualId: doc?.getFlag(MODULE_ID, FLAG_MANUAL_STATUS),
+    marker: doc?.getFlag(MODULE_ID, FLAG_MANUAL_MARKER)
+  };
+}
+
+async function setManualFlags(actor, manualId) {
+  const doc = getFlagDocument(actor);
+  await doc.update({
+    [`flags.${MODULE_ID}.${FLAG_MANUAL_STATUS}`]: manualId,
+    [`flags.${MODULE_ID}.${FLAG_MANUAL_MARKER}`]: true
+  });
+}
+
+async function clearManualFlags(actor) {
+  const doc = getFlagDocument(actor);
+  await doc.update({
+    [`flags.${MODULE_ID}.${FLAG_MANUAL_STATUS}`]: null,
+    [`flags.${MODULE_ID}.${FLAG_MANUAL_MARKER}`]: null
+  });
+}
+
 function isEquippedWeapon(item) {
   if (item.type !== "weapon") return false;
-
   const equipped =
     item.system?.equipped ??
     item.system?.isEquipped ??
     item.system?.equippedWeapon;
-
   return equipped === true;
 }
 
-/**
- * Get the highest Reach among equipped weapons for the given Actor (Reach stored in item.system.range).
- * @param {Actor} actor
- * @returns {number}
- */
-function getEquippedReach(actor) {
+function getPcReach(actor) {
   const weapons = actor.items.filter(isEquippedWeapon);
   if (!weapons.length) return 0;
-
-  const reaches = weapons.map(w => Number(w.system?.range ?? 0) || 0);
-  return Math.max(...reaches, 0);
+  return Math.max(...weapons.map(w => Number(w.system?.range ?? 0) || 0), 0);
 }
 
-/**
- * Activate the Reach status matching the current equipped Reach and deactivate all others.
- * - If "No Reach" is manually active, it overrides automation.
- * - If "Show Reach 1 Icon" is disabled, Reach 1 results in no automatic icon.
- */
-async function setReachStatus(actor) {
-  if (!actor) return;
+function getNpcReach(actor) {
+  const allowedTypes = new Set(["npcattack", "weapon"]);
+  const candidates = actor.items.filter(i => allowedTypes.has(i.type));
+  if (!candidates.length) return 0;
+  const reaches = candidates
+    .map(i => Number(i.system?.range ?? 0) || 0)
+    .filter(n => n > 0);
+  return reaches.length ? Math.max(...reaches) : 0;
+}
 
-  // Manual override: if "No Reach" is active, ensure all Reach statuses are off and do not auto-apply.
+async function redrawActorTokenEffects(actor) {
+  if (!canvas?.ready || typeof actor.getActiveTokens !== "function") return;
+  for (const token of actor.getActiveTokens()) await token.drawEffects();
+}
+
+async function reconcileManualOverride(actor) {
+  if (actor.type !== "npc") return;
+  const { manualId, marker } = getManualFlags(actor);
+  if (marker !== true || !manualId) return;
+  if (!ALL_STATUS_IDS.includes(manualId) || !actorHasStatus(actor, manualId)) {
+    await clearManualFlags(actor);
+  }
+}
+
+async function setReachStatus(actor) {
+  if (!actor || !isAuthoritativeForActor(actor)) return;
+
+  if (actor.type === "npc") await reconcileManualOverride(actor);
   if (actorHasStatus(actor, NO_REACH_ID)) {
     await applyExclusiveStatus(actor, NO_REACH_ID);
     await redrawActorTokenEffects(actor);
@@ -170,7 +198,18 @@ async function setReachStatus(actor) {
   }
 
   const showReach1 = game.settings.get(MODULE_ID, "showReach1");
-  const reach = clampNumber(getEquippedReach(actor), 0, MAX_REACH);
+  if (actor.type === "npc") {
+    const { manualId, marker } = getManualFlags(actor);
+    if (marker === true && manualId && ALL_STATUS_IDS.includes(manualId)) {
+      await applyExclusiveStatus(actor, manualId);
+      await redrawActorTokenEffects(actor);
+      return;
+    }
+  }
+
+  // Automatic computation
+  const reachValue = (actor.type === "npc") ? getNpcReach(actor) : getPcReach(actor);
+  const reach = clampNumber(reachValue, 0, MAX_REACH);
 
   let targetId = null;
   if (reach === 1 && showReach1) targetId = "conan-reach-1";
@@ -180,76 +219,122 @@ async function setReachStatus(actor) {
   await applyExclusiveStatus(actor, targetId);
   await redrawActorTokenEffects(actor);
 }
+/** Schedule a Reach recomputation for an Actor. */
+function scheduleReach(actor, { immediate = false } = {}) {
+  if (!actor) return;
+  const key = actor.uuid ?? actor.id ?? actor._id;
+  if (!key) return;
 
-/**
- * Ensure active tokens redraw their effect icons promptly.
- */
-async function redrawActorTokenEffects(actor) {
-  if (!canvas?.ready || typeof actor.getActiveTokens !== "function") return;
-  for (const token of actor.getActiveTokens()) {
-    await token.drawEffects();
+  if (immediate) {
+    setReachStatus(actor);
+    return;
   }
+
+  if (!_debouncers.has(key)) {
+    _debouncers.set(key, foundry.utils.debounce(() => setReachStatus(actor), 100));
+  }
+  _debouncers.get(key)();
 }
 
-const debouncedSetReach = foundry.utils.debounce((actor) => setReachStatus(actor), 100);
+function shouldRecomputeForItem(item) {
+  return item?.type === "weapon" || item?.type === "npcattack";
+}
 
-/**
- * Recompute Reach status whenever a weapon item changes.
- */
 Hooks.on("updateItem", (item) => {
   const actor = item.parent;
-  if (!actor || item.type !== "weapon") return;
-  debouncedSetReach(actor);
+  if (actor && shouldRecomputeForItem(item)) scheduleReach(actor);
 });
-
 Hooks.on("createItem", (item) => {
   const actor = item.parent;
-  if (actor && item.type === "weapon") debouncedSetReach(actor);
+  if (actor && shouldRecomputeForItem(item)) scheduleReach(actor);
 });
-
 Hooks.on("deleteItem", (item) => {
   const actor = item.parent;
-  if (actor && item.type === "weapon") debouncedSetReach(actor);
+  if (actor && shouldRecomputeForItem(item)) scheduleReach(actor);
 });
 
-/**
- * Enforce mutual exclusivity when a user manually toggles one of our statuses.
- * If "No Reach" is enabled, automation will be suppressed by setReachStatus.
- */
-Hooks.on("createActiveEffect", async (effect) => {
-  if (_enforcingExclusivity) return;
+Hooks.on("createToken", (tokenDoc) => {
+  const actor = tokenDoc?.actor;
+  if (actor) scheduleReach(actor);
+});
+Hooks.on("updateToken", (tokenDoc) => {
+  const actor = tokenDoc?.actor;
+  if (actor) scheduleReach(actor);
+});
 
+Hooks.on("renderTokenHUD", (hud, html) => {
+  const actor = hud?.object?.actor;
+  if (!actor) return;
+
+  const root = html instanceof HTMLElement ? html : html?.[0];
+  if (!root) return;
+
+  const allowReachHud = game.user.isGM && actor.type === "npc";
+
+  if (!allowReachHud) {
+    for (const id of REACH_IDS) {
+      root.querySelectorAll(`[data-status-id="${id}"]`).forEach(el => el.remove());
+    }
+    return;
+  }
+
+  root.querySelectorAll(`[data-status-id]`).forEach(el => {
+    const statusId = el.getAttribute("data-status-id");
+    if (!ALL_STATUS_IDS.includes(statusId)) return;
+
+    if (el.dataset.reachBound === "1") return;
+    el.dataset.reachBound = "1";
+
+    el.addEventListener("click", async (ev) => {
+      try {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (_enforcingExclusivity) return;
+        if (!isAuthoritativeForActor(actor)) return;
+
+        const currentlyActive = actorHasStatus(actor, statusId);
+
+        if (currentlyActive) {
+          await applyExclusiveStatus(actor, null);
+          await clearManualFlags(actor);
+          await redrawActorTokenEffects(actor);
+          scheduleReach(actor);
+          return;
+        }
+
+        await applyExclusiveStatus(actor, statusId);
+
+        if (statusId !== NO_REACH_ID) await setManualFlags(actor, statusId);
+        else await clearManualFlags(actor);
+
+        await redrawActorTokenEffects(actor);
+      } catch (err) {
+        console.error(`${MODULE_ID} | HUD click handler error`, err);
+      }
+    }, { capture: true });
+  });
+});
+
+Hooks.on("deleteActiveEffect", async (effect) => {
+  if (_enforcingExclusivity) return;
   const actor = effect.parent;
   if (!actor || actor.documentName !== "Actor") return;
+  if (!isAuthoritativeForActor(actor)) return;
 
-  // Identify which of our statuses was activated.
-  const activated = ALL_STATUS_IDS.find(id => effectHasStatus(effect, id));
-  if (!activated) return;
+  if (actor.type === "npc") {
+    const removedId = ALL_STATUS_IDS.find(id => effectHasStatus(effect, id));
+    if (removedId) {
+      const { manualId, marker } = getManualFlags(actor);
+      if (marker === true && manualId === removedId) await clearManualFlags(actor);
+    }
+  }
 
-  await applyExclusiveStatus(actor, activated);
-
-  // If "No Reach" was just activated, make sure it takes effect immediately.
-  // If a Reach status was manually activated, keep it exclusive (even though the module may overwrite it later on item updates).
-  await redrawActorTokenEffects(actor);
+  scheduleReach(actor);
 });
 
-Hooks.on("deleteActiveEffect", (effect) => {
-  if (_enforcingExclusivity) return;
-
-  const actor = effect.parent;
-  if (!actor || actor.documentName !== "Actor") return;
-
-  // If one of our statuses was removed manually, recompute automation (e.g. No Reach toggled off).
-  const wasOurs = ALL_STATUS_IDS.some(id => effectHasStatus(effect, id));
-  if (!wasOurs) return;
-
-  debouncedSetReach(actor);
-});
-
-/**
- * On canvas ready, apply Reach status to actors currently present in the scene.
- */
 Hooks.on("canvasReady", () => {
-  const actors = new Set(canvas.tokens.placeables.map(t => t.actor).filter(Boolean));
-  for (const actor of actors) debouncedSetReach(actor);
+  for (const token of canvas.tokens.placeables) {
+    const actor = token.actor;
+    if (actor) scheduleReach(actor);
+  }
 });
