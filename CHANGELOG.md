@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [0.0.4] - 2026-02-21
+### Fixed
+- Ensured the **No Reach** status is mutually exclusive with Reach 1–3 for both Player Characters and NPCs.
+- Restored automatic Reach re-evaluation when Reach-related statuses are toggled (e.g., disabling **No Reach** re-applies the appropriate automatic Reach).
+- Improved reliability of status updates when equipping/unequipping items and when toggling module settings.
+
 ## [0.0.3] - 2026-02-18
 ### Added
 - NPC support: automatic Reach is derived from the highest `system.range` among `npcattack` (and `weapon`) items.

@@ -71,7 +71,7 @@ function buildStatusEffects() {
 Hooks.once("init", () => {
   game.settings.register(MODULE_ID, "showReach1", {
     name: "Show Reach 1 Icon",
-    hint: "If disabled, tokens with Reach 1 will not show a Reach Status icon (reduces visual clutter).",
+    hint: "If disabled, Reach 1 will not be applied automatically (reduces on-screen clutter).",
     scope: "world",
     config: true,
     type: Boolean,
@@ -315,21 +315,41 @@ Hooks.on("renderTokenHUD", (hud, html) => {
   });
 });
 
-Hooks.on("deleteActiveEffect", async (effect) => {
+Hooks.on("createActiveEffect", (effect) => {
   if (_enforcingExclusivity) return;
+
   const actor = effect.parent;
   if (!actor || actor.documentName !== "Actor") return;
   if (!isAuthoritativeForActor(actor)) return;
 
+  const addedId = ALL_STATUS_IDS.find(id => effectHasStatus(effect, id));
+  if (!addedId) return;
+
+  // Re-evaluate immediately so that enabling "No Reach" removes any Reach status,
+  // and enabling Reach statuses respects module rules.
+  scheduleReach(actor, { immediate: true });
+});
+
+Hooks.on("deleteActiveEffect", async (effect) => {
+  if (_enforcingExclusivity) return;
+
+  const actor = effect.parent;
+  if (!actor || actor.documentName !== "Actor") return;
+  if (!isAuthoritativeForActor(actor)) return;
+
+  const removedId = ALL_STATUS_IDS.find(id => effectHasStatus(effect, id));
+  if (!removedId) return;
+
+  // If an NPC manual override effect was removed outside the HUD, clear the stored override.
   if (actor.type === "npc") {
-    const removedId = ALL_STATUS_IDS.find(id => effectHasStatus(effect, id));
-    if (removedId) {
-      const { manualId, marker } = getManualFlags(actor);
-      if (marker === true && manualId === removedId) await clearManualFlags(actor);
+    const { manualId, marker } = getManualFlags(actor);
+    if (marker === true && manualId === removedId) {
+      await clearManualFlags(actor);
     }
   }
 
-  scheduleReach(actor);
+  // Re-evaluate immediately so that disabling "No Reach" restores automatic Reach.
+  scheduleReach(actor, { immediate: true });
 });
 
 Hooks.on("canvasReady", () => {
